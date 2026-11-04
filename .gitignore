@@ -5,3 +5,7 @@ outputs/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# audio de demostración (se regenera o es tuyo)
+demo/*
+!demo/README.md

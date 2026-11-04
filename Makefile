@@ -1,4 +1,4 @@
-.PHONY: ayuda setup datos datos-min verificar extraer limpiar
+.PHONY: ayuda setup datos datos-min verificar extraer entrenar pista demo limpiar
 
 VENV := .venv/bin
 PY   := $(VENV)/python
@@ -11,9 +11,12 @@ ayuda:
 	@echo "  make datos-min   solo anotaciones (4.6 MB, sin audio)"
 	@echo "  make verificar   comprueba entorno, GPU y datos"
 	@echo "  make extraer     procesa el corpus y guarda las características"
+	@echo "  make entrenar    entrena y evalúa el MLP y el Conv1D"
+	@echo "  make pista       arma la pista de prueba con fragmentos de DEAM"
+	@echo "  make demo ARCHIVO=cancion.mp3    franja y video de una canción"
 	@echo "  make limpiar     borra lo generado (conserva el audio descargado)"
 	@echo
-	@echo "Primera vez:  ./setup.sh && make datos && make extraer"
+	@echo "Primera vez:  ./setup.sh && make datos && make extraer && make entrenar"
 
 setup:
 	@./setup.sh
@@ -29,6 +32,17 @@ verificar: | $(PY)
 
 extraer: | $(PY)
 	@$(PY) src/extraer.py
+
+entrenar: | $(PY)
+	@$(PY) src/entrenar.py
+
+pista: | $(PY)
+	@$(PY) scripts/pista_demo.py
+
+demo: | $(PY)
+	@test -n "$(ARCHIVO)" || { \
+		echo "Uso:  make demo ARCHIVO=ruta/a/cancion.mp3" >&2; exit 1; }
+	@$(PY) src/visualizar.py "$(ARCHIVO)"
 
 $(PY):
 	@echo "No encuentro $(PY) — corre primero:  ./setup.sh" >&2

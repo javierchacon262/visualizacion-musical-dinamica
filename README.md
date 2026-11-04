@@ -22,6 +22,14 @@ cd visualizacion-musical-dinamica
 ./setup.sh          # crea el entorno (Python 3.12 vía uv) e instala todo
 make datos          # descarga el corpus DEAM (~1.3 GB, reanudable)
 make extraer        # procesa 1802 canciones (~3 min con 22 núcleos)
+make entrenar       # entrena y evalúa el MLP y el Conv1D
+```
+
+Y para ver el resultado sobre audio:
+
+```bash
+make pista                                       # arma la pista de prueba
+make demo ARCHIVO=demo/recorrido-cuadrantes.mp3  # franja PNG + video MP4
 ```
 
 Y para comprobar que todo quedó bien:
@@ -177,6 +185,57 @@ sin NaN ni Inf · etiquetas en [−0.77, 0.83]
 
 ---
 
+## Resultados
+
+Dos modelos sobre las mismas características, para aislar una sola variable:
+si el modelo ve contexto temporal o no. El MLP trata cada bloque de medio
+segundo por separado; el Conv1D convoluciona a lo largo del tiempo.
+
+| correlación · test | MLP | Conv1D |
+|---|---:|---:|
+| activación · entre canciones | 0.791 | 0.790 |
+| activación · **dentro de canción** | 0.079 | **0.134** |
+| valencia · entre canciones | 0.675 | 0.649 |
+| valencia · **dentro de canción** | 0.035 | **0.056** |
+| parámetros | 18 498 | 157 890 |
+
+La fila «entre» no se mueve: para distinguir una canción intensa de una suave
+basta el nivel medio de energía, y el contexto temporal no aporta nada. La fila
+«dentro» casi se duplica. Es la asimetría que uno espera si la hipótesis es
+correcta — **el contexto temporal solo puede ayudar en la parte que depende del
+tiempo**.
+
+### La etiqueta se mueve menos que el modelo
+
+| desviación dentro de canción | activación |
+|---|---:|
+| etiqueta de DEAM | 0.035 |
+| predicción del Conv1D | 0.082 |
+
+Promediar diez anotadores cancela casi todo el vaivén dentro de un fragmento de
+30 s y deja una curva casi plana. El modelo ya oscila más que su propio
+objetivo, así que el problema no es solo seguir mal la curva: la curva de
+referencia apenas se mueve.
+
+### Calibración
+
+Una red entrenada con MSE regresa a la media — equivocarse en el centro cuesta
+menos — y comprime la dispersión en un factor 1.4. En pantalla eso da colores
+apagados. `entrenar.py` mide el factor sobre el conjunto de test y guarda
+`calibracion_<modelo>.npz`; `visualizar.py` lo aplica. **No cambia la
+correlación**, que es lo que mide el acierto: solo la escala. Para ver la salida
+cruda, `--sin-calibrar`.
+
+### Sobre audio real
+
+La pista de `make pista` empalma seis fragmentos de DEAM en los extremos de los
+cuatro cuadrantes. **Cinco de los seis** caen en el cuadrante correcto. El que
+falla está anotado como *calma* (V +0.65, A −0.47) y se predice como tensión
+(V −0.22, A +0.54): es una pieza densa y brillante, y el modelo lee timbre y
+energía, no armonía ni letra.
+
+---
+
 ## Estructura
 
 ```
@@ -185,12 +244,16 @@ sin NaN ni Inf · etiquetas en [−0.77, 0.83]
 ├── Makefile                  make datos / extraer / verificar
 ├── scripts/
 │   ├── descargar_datos.py    descarga DEAM (stdlib: corre sin el venv)
+│   ├── pista_demo.py         arma la pista de prueba de 6 fragmentos
 │   └── verificar.py          comprueba entorno, GPU y datos
 ├── src/
 │   ├── config.py             rutas y constantes
 │   ├── color.py              Russell → HSV, verificado en 4 cuadrantes
 │   ├── features.py           extracción alineada con las anotaciones
-│   └── extraer.py            corre el corpus en paralelo
+│   ├── extraer.py            corre el corpus en paralelo
+│   ├── entrenar.py           MLP y Conv1D, evaluación descompuesta
+│   └── visualizar.py         canción → franja PNG y video MP4
+├── demo/                     tu audio (ignorado por git salvo el README)
 └── data/                     (ignorado por git) corpus y características
 ```
 
@@ -203,15 +266,15 @@ sin NaN ni Inf · etiquetas en [−0.77, 0.83]
 | Mapeo emoción → color | ✅ verificado |
 | Descarga y verificación del corpus | ✅ |
 | Extracción de características | ✅ 108 120 puntos |
-| MLP (línea base) | pendiente |
-| Conv1D sobre secuencias | pendiente |
+| MLP (línea base) | ✅ r dentro 0.079 |
+| Conv1D sobre secuencias | ✅ r dentro 0.134 |
 | Conv2D sobre mel-espectrograma | pendiente |
 | CRNN | pendiente |
 | Autoencoder (no supervisado) | pendiente |
-| Renderizado de video | pendiente |
+| Renderizado de video | ✅ |
 
-Métricas previstas: RMSE y correlación de Pearson, **separadas en componente
-entre canciones y dentro de canción**, reportadas contra el techo humano.
+Métricas: RMSE y correlación de Pearson, **separadas en componente entre
+canciones y dentro de canción**, reportadas contra el techo humano.
 
 ---
 
