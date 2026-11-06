@@ -94,10 +94,12 @@ def _disco_png() -> bytes:
 
 class Manejador(BaseHTTPRequestHandler):
     server_version = "VisualizacionMusical/1.0"
+    protocol_version = "HTTP/1.1"                 # el audio se sirve mejor así
 
-    def log_message(self, formato, *args):        # menos ruido en consola
-        if "/api/analizar" in (args[0] if args else ""):
-            sys.stderr.write(f"  analizando… {args[0]}\n")
+    def log_message(self, formato, *args):
+        # Una línea por petición: sin esto no hay forma de ver si el navegador
+        # llegó siquiera, que es justo lo que hace falta cuando algo no suena.
+        sys.stderr.write("  " + (formato % args) + "\n")
 
     # ── utilidades de respuesta ──
     def _enviar(self, cuerpo: bytes, tipo: str, codigo: int = 200,
@@ -252,83 +254,101 @@ audio{width:100%;height:38px}
 
 <script>
 const $ = id => document.getElementById(id);
-let D = null;                        // análisis de la canción actual
+let D = null, tira = null, animando = false;
 
 const avisar = (t, mal=false) => { $('aviso').textContent = t;
                                    $('aviso').classList.toggle('mal', mal); };
 
-async function listar(){
-  const r = await fetch('/api/canciones');
-  const cs = await r.json();
-  $('sel').innerHTML = cs.length
-    ? cs.map(c => `<option value="${c.nombre}">${c.nombre} · ${c.mb} MB</option>`).join('')
-    : '<option value="">(no hay audio en demo/)</option>';
-  $('cargar').disabled = !cs.length;
-  if(!cs.length) avisar('Deja un mp3, wav, m4a o flac en demo/ y pulsa ↻ carpeta.');
+async function listar(auto){
+  try{
+    const cs = await (await fetch('/api/canciones')).json();
+    $('sel').innerHTML = cs.length
+      ? cs.map(c => `<option value="${c.nombre}">${c.nombre} · ${c.mb} MB</option>`).join('')
+      : '<option value="">(no hay audio en demo/)</option>';
+    $('cargar').disabled = !cs.length;
+    if(!cs.length){ avisar('Deja un mp3, wav, m4a o flac en demo/ y pulsa ↻ carpeta.'); return; }
+    if(auto) cargar();
+  }catch(e){ avisar('No pude hablar con el servidor: ' + e.message, true); }
 }
 
-function pintarFranja(){
-  const c = $('franja'), g = c.getContext('2d');
-  c.width = c.clientWidth;
-  const n = D.rgb.length, w = c.width / n;
+function construirTira(){
+  // La franja se dibuja UNA vez en un lienzo de 1 px de alto; cada cuadro solo
+  // la estira. Repintarla entera 60 veces por segundo dejaba la página pegada.
+  const n = D.rgb.length;
+  tira = document.createElement('canvas');
+  tira.width = n; tira.height = 1;
+  const g = tira.getContext('2d'), img = g.createImageData(n, 1);
   for(let i=0;i<n;i++){
     const [r,gg,b] = D.rgb[i];
-    g.fillStyle = `rgb(${r},${gg},${b})`;
-    g.fillRect(i*w, 0, Math.ceil(w)+1, c.height);
+    img.data[i*4]=r; img.data[i*4+1]=gg; img.data[i*4+2]=b; img.data[i*4+3]=255;
   }
+  g.putImageData(img, 0, 0);
 }
 
-function marcar(){                   // cursor sobre la franja
-  if(!D) return;
+function dibujarFranja(){
+  if(!tira) return;
   const c = $('franja'), g = c.getContext('2d');
-  pintarFranja();
-  const x = ($('audio').currentTime / D.duracion) * c.width;
-  g.fillStyle = '#fff'; g.fillRect(x-1, 0, 2, c.height);
+  if(c.width !== c.clientWidth) c.width = c.clientWidth;
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tira, 0, 0, c.width, c.height);
+  const x = (($('audio').currentTime || 0) / D.duracion) * c.width;
+  g.fillStyle = '#fff'; g.fillRect(x - 1, 0, 2, c.height);
 }
+
+function pintar(){
+  if(!D) return;
+  const n = D.rgb.length;
+  const i = Math.max(0, Math.min(Math.floor($('audio').currentTime * D.hz), n - 1));
+  const [r,g,b] = D.rgb[i];
+  $('color').style.backgroundColor = `rgb(${r},${g},${b})`;
+  $('punto').style.left = (50 + D.valencia[i]*50) + '%';
+  $('punto').style.top  = (50 - D.activacion[i]*50) + '%';
+  $('t').textContent   = $('audio').currentTime.toFixed(1).replace('.', ',');
+  $('v').textContent   = D.valencia[i].toFixed(2).replace('.', ',');
+  $('a').textContent   = D.activacion[i].toFixed(2).replace('.', ',');
+  $('rgb').textContent = `${r}, ${g}, ${b}`;
+  dibujarFranja();
+}
+
+function bucle(){ pintar(); if(animando) requestAnimationFrame(bucle); }
 
 async function cargar(){
   const f = $('sel').value; if(!f) return;
-  $('cargar').disabled = true; D = null;
-  avisar('Analizando… la primera vez tarda unos segundos.');
+  $('cargar').disabled = true; D = null; tira = null; animando = false;
+  avisar('Analizando «' + f + '»… la primera vez tarda unos segundos.');
   try{
-    const r = await fetch('/api/analizar?f=' + encodeURIComponent(f));
-    const j = await r.json();
+    const j = await (await fetch('/api/analizar?f=' + encodeURIComponent(f))).json();
     if(j.error) throw new Error(j.error);
     D = j;
+    construirTira();
     $('audio').src = '/audio/' + encodeURIComponent(f);
-    pintarFranja();
-    avisar(`${D.rgb.length} bloques · ${D.duracion.toFixed(1)} s · modelo ${D.modelo}`);
-  }catch(e){ avisar('Error: ' + e.message, true); }
+    avisar(`${D.rgb.length} bloques · ${D.duracion.toFixed(1)} s · modelo ${D.modelo} — dale al play`);
+  }catch(e){ avisar('Error al analizar: ' + e.message, true); }
   finally{ $('cargar').disabled = false; }
 }
 
-function tic(){
-  if(D){
-    const i = Math.min(Math.floor($('audio').currentTime * D.hz), D.rgb.length-1);
-    if(i >= 0){
-      const [r,g,b] = D.rgb[i];
-      $('color').style.backgroundColor = `rgb(${r},${g},${b})`;
-      $('punto').style.left = (50 + D.valencia[i]*50) + '%';
-      $('punto').style.top  = (50 - D.activacion[i]*50) + '%';
-      $('t').textContent   = $('audio').currentTime.toFixed(1).replace('.', ',');
-      $('v').textContent   = D.valencia[i].toFixed(2).replace('.', ',');
-      $('a').textContent   = D.activacion[i].toFixed(2).replace('.', ',');
-      $('rgb').textContent = `${r}, ${g}, ${b}`;
-      marcar();
-    }
-  }
-  requestAnimationFrame(tic);
-}
+const A = $('audio');
+A.addEventListener('playing', () => { animando = true; bucle(); });
+A.addEventListener('pause',  () => { animando = false; pintar(); });
+A.addEventListener('ended',  () => { animando = false; pintar(); });
+A.addEventListener('seeked', pintar);
+A.addEventListener('loadeddata', pintar);
+A.addEventListener('error', () => {
+  const c = A.error ? A.error.code : '?';
+  avisar(`El navegador no pudo reproducir el audio (código ${c}). `
+       + 'Mira la consola del servidor.', true);
+});
 
-$('cargar').onclick   = cargar;
-$('recargar').onclick = listar;
-$('franja').onclick = e => {         // clic en la franja = saltar ahí
+$('cargar').onclick   = () => cargar();
+$('recargar').onclick = () => listar(false);
+$('franja').onclick = e => {
   if(!D) return;
   const c = e.target.getBoundingClientRect();
-  $('audio').currentTime = ((e.clientX - c.left) / c.width) * D.duracion;
+  A.currentTime = ((e.clientX - c.left) / c.width) * D.duracion;
+  pintar();
 };
-window.addEventListener('resize', () => D && marcar());
-listar(); tic();
+window.addEventListener('resize', () => { if(D) dibujarFranja(); });
+listar(true);                       // analiza la primera canción al abrir
 </script></body></html>
 """
 
