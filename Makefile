@@ -1,4 +1,4 @@
-.PHONY: ayuda setup datos datos-min verificar extraer entrenar pista demo limpiar
+.PHONY: ayuda setup datos datos-min verificar extraer entrenar pista demo visor limpiar
 
 VENV := .venv/bin
 PY   := $(VENV)/python
@@ -14,6 +14,7 @@ ayuda:
 	@echo "  make entrenar    entrena y evalúa el MLP y el Conv1D"
 	@echo "  make pista       arma la pista de prueba con fragmentos de DEAM"
 	@echo "  make demo ARCHIVO=cancion.mp3    franja y video de una canción"
+	@echo "  make visor       visor web en http://127.0.0.1:8765"
 	@echo "  make limpiar     borra lo generado (conserva el audio descargado)"
 	@echo
 	@echo "Primera vez:  ./setup.sh && make datos && make extraer && make entrenar"
@@ -38,6 +39,9 @@ entrenar: | $(PY)
 
 pista: | $(PY)
 	@$(PY) scripts/pista_demo.py
+
+visor: | $(PY)
+	@$(PY) src/servidor.py
 
 demo: | $(PY)
 	@test -n "$(ARCHIVO)" || { \
