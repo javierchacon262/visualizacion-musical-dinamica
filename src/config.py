@@ -24,6 +24,13 @@ ANOT_ESTATICAS = (
 SALIDA_DIR = Path(os.environ.get("DEAM_OUT", DEAM_DIR / "procesado"))
 MEL_DIR = SALIDA_DIR / "mel"
 
+# OASIS: 900 imágenes con valoraciones normativas de valencia y activación
+# (Kurdi, Lozano & Banaji, 2017). Los mismos dos ejes que predice el modelo,
+# que es lo que permite enlazar audio e imagen sin inventar un puente.
+OASIS_DIR = Path(os.environ.get("OASIS_DIR", DEAM_DIR / "oasis"))
+OASIS_IMG = OASIS_DIR / "images"
+OASIS_CSV = OASIS_DIR / "OASIS.csv"   # normativo: una fila por imagen
+
 # ── audio ──────────────────────────────────────────────────────────────────
 SR = 22050
 

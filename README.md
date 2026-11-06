@@ -261,6 +261,51 @@ fragmentos de DEAM elegidos en el extremo de su cuadrante:
 | `cuadrantes` | los cuatro: **cinco de seis** correctos |
 | `calma-alegria` | el fallo sistemático en calma |
 
+## Imágenes
+
+La tercera capa. `src/imagenes.py` recupera de **OASIS** la imagen cuya emoción
+anotada está más cerca de la que el modelo predice en ese instante.
+
+OASIS (Kurdi, Lozano & Banaji, 2017) valora 900 imágenes en **los mismos dos
+ejes** que predice el modelo, así que el enlace no necesita un puente inventado:
+es una búsqueda de vecino más cercano en el plano (valencia, activación). Es el
+método de **Xing et al. (2019, IEEE Access)**, que enlazan imagen y música por
+similitud emocional en vez de entrenar un generador transmodal.
+
+```bash
+make imagenes          # descarga OASIS (92 MB)
+python src/imagenes.py # comprueba el corpus y la recuperación
+```
+
+Lo que recupera, por cuadrante:
+
+| cuadrante | imagen | categoría |
+|---|---|---|
+| tensión (V− A+) | Explosion 5 | Scene |
+| alegría (V+ A+) | Fireworks 2 | Scene |
+| calma (V+ A−) | Flowers 6 | Object |
+| tristeza (V− A−) | Garbage dump 1 | Scene |
+
+**La imagen no cambia cada medio segundo**, que sería un estroboscopio. Se
+mantiene hasta que se cumplen las dos condiciones: que hayan pasado 8 segundos
+y que el punto emocional se haya movido más de 0.22. Así los cambios caen donde
+la música cambia, no a intervalos fijos. Sobre una pista de 4.5 minutos salen
+unos 20 tramos.
+
+### Aviso de contenido
+
+OASIS es un conjunto afectivo, no un banco de imágenes agradables: para cubrir
+la valencia negativa incluye heridas, agresión y escenas angustiosas, y casi
+todo eso cae en la categoría `Person`. **El visor filtra por categoría y trae
+`Person` desactivada**, con un aviso si se reactiva.
+
+| categoría | n | por defecto |
+|---|---:|---|
+| Object | 200 | ✅ |
+| Scene | 220 | ✅ |
+| Animal | 134 | ✅ |
+| Person | 346 | ❌ |
+
 ## Formas
 
 `src/formas.py` mapea el mismo par (valencia, activación) a la forma de un
@@ -299,12 +344,14 @@ el cuello de botella de la predicción es el ruido de etiqueta, no la capacidad.
 ├── Makefile                  make datos / extraer / verificar
 ├── scripts/
 │   ├── descargar_datos.py    descarga DEAM (stdlib: corre sin el venv)
-│   ├── pista_demo.py         arma la pista de prueba de 6 fragmentos
+│   ├── descargar_imagenes.py descarga OASIS (stdlib)
+│   ├── pista_demo.py         arma las pistas de prueba
 │   └── verificar.py          comprueba entorno, GPU y datos
 ├── src/
 │   ├── config.py             rutas y constantes
 │   ├── color.py              Russell → HSV, verificado en 4 cuadrantes
 │   ├── formas.py             Russell → polígono, verificado en 4 cuadrantes
+│   ├── imagenes.py           recuperación en OASIS por cercanía emocional
 │   ├── features.py           extracción alineada con las anotaciones
 │   ├── extraer.py            corre el corpus en paralelo
 │   ├── entrenar.py           MLP y Conv1D, evaluación descompuesta
@@ -331,6 +378,7 @@ el cuello de botella de la predicción es el ruido de etiqueta, no la capacidad.
 | Renderizado de video | ✅ |
 | Visor web en vivo | ✅ |
 | Mapeo a formas (paramétrico) | ✅ |
+| Capa de imagen (OASIS) | ✅ |
 
 Métricas: RMSE y correlación de Pearson, **separadas en componente entre
 canciones y dentro de canción**, reportadas contra el techo humano.

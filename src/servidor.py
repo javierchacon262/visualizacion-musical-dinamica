@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import color as col
 import config as cfg
 import formas as fm
+import imagenes as im
 import visualizar as vis
 
 EXTENSIONES = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
@@ -162,6 +163,17 @@ class Manejador(BaseHTTPRequestHandler):
             "Content-Range": f"bytes {ini}-{fin}/{tam}",
         })
 
+    def _imagen(self, nombre: str) -> None:
+        """Sirve una imagen de OASIS, comprobando que no se salga de su carpeta."""
+        raiz = cfg.OASIS_IMG.resolve()
+        ruta = (raiz / nombre).resolve()
+        if raiz not in ruta.parents or not ruta.is_file():
+            self._json({"error": "no encontrada"}, 404)
+            return
+        tipo = "image/png" if ruta.suffix.lower() == ".png" else "image/jpeg"
+        with open(ruta, "rb") as f:
+            self._enviar(f.read(), tipo, extra={"Cache-Control": "max-age=86400"})
+
     # ── rutas ──
     def do_GET(self):                              # noqa: N802
         u = urlparse(self.path)
@@ -186,6 +198,32 @@ class Manejador(BaseHTTPRequestHandler):
                 self._json(_analizar(nombre))
             except Exception as e:                 # el navegador debe verlo
                 self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+        elif ruta == "/api/categorias":
+            try:
+                from collections import Counter
+                c = Counter(e["categoria"] for e in im.cargar())
+                self._json({"categorias": [
+                    {"nombre": k, "n": c[k], "defecto": k in im.POR_DEFECTO}
+                    for k in im.CATEGORIAS if c.get(k)]})
+            except Exception as e:
+                self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+        elif ruta == "/api/imagenes":
+            q = parse_qs(u.query)
+            nombre = unquote((q.get("f") or [""])[0])
+            cats = tuple(c for c in (q.get("cats") or [""])[0].split(",")
+                         if c in im.CATEGORIAS) or im.POR_DEFECTO
+            if not nombre or "/" in nombre or "\\" in nombre:
+                self._json({"error": "nombre inválido"}, 400)
+                return
+            try:
+                d = _analizar(nombre)
+                self._json({"categorias": list(cats),
+                            "tramos": im.secuencia(d["valencia"],
+                                                   d["activacion"], cats)})
+            except Exception as e:
+                self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+        elif ruta.startswith("/oasis/"):
+            self._imagen(unquote(ruta[len("/oasis/"):]))
         elif ruta.startswith("/audio/"):
             self._audio(unquote(ruta[len("/audio/"):]))
         else:
@@ -216,6 +254,9 @@ button:disabled{opacity:.45;cursor:default}
 label.conm{display:flex;align-items:center;gap:7px;font-size:14px;color:var(--suave);
            cursor:pointer;user-select:none}
 label.conm input{accent-color:var(--acento);width:16px;height:16px;cursor:pointer}
+.cats{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+      padding-left:10px;border-left:1px solid var(--borde)}
+.cats .av{font-size:12px;color:#E8793F}
 .lateral{width:260px;display:flex;flex-direction:column;gap:14px;flex-shrink:0}
 .disco{position:relative;width:260px;height:260px}
 .disco img{width:100%;height:100%;display:block}
@@ -241,6 +282,8 @@ audio{width:100%;height:38px}
   <button id="cargar">Analizar</button>
   <button id="recargar" title="Volver a leer la carpeta demo/">↻ carpeta</button>
   <label class="conm"><input type="checkbox" id="conFormas" checked> formas</label>
+  <label class="conm"><input type="checkbox" id="conImagen" checked> imagen</label>
+  <span id="cats" class="cats"></span>
   <span id="aviso"></span>
 </div>
 
@@ -267,11 +310,13 @@ audio{width:100%;height:38px}
   <span>activación <b id="a">—</b></span>
   <span>RGB <b id="rgb">—</b></span>
   <span>forma <b id="forma">—</b></span>
+  <span>imagen <b id="img">—</b></span>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
 let D = null, tira = null, animando = false;
+let T = null, ultimoTramo = null;   // tramos de imagen
 
 const avisar = (t, mal=false) => { $('aviso').textContent = t;
                                    $('aviso').classList.toggle('mal', mal); };
@@ -286,6 +331,50 @@ async function listar(auto){
     if(!cs.length){ avisar('Deja un mp3, wav, m4a o flac en demo/ y pulsa ↻ carpeta.'); return; }
     if(auto) cargar();
   }catch(e){ avisar('No pude hablar con el servidor: ' + e.message, true); }
+}
+
+async function listarCategorias(){
+  try{
+    const j = await (await fetch('/api/categorias')).json();
+    if(j.error){ $('cats').textContent = 'sin imágenes (' + j.error + ')'; return; }
+    $('cats').innerHTML = j.categorias.map(c =>
+      `<label class="conm"><input type="checkbox" class="cat" value="${c.nombre}"`
+      + `${c.defecto ? ' checked' : ''}> ${c.nombre} <span style="opacity:.55">`
+      + `${c.n}</span></label>`).join('')
+      + '<span class="av" id="avisoCat"></span>';
+    document.querySelectorAll('.cat').forEach(el => el.onchange = () => {
+      avisarCategorias(); cargarImagenes();
+    });
+    avisarCategorias();
+  }catch(e){ $('cats').textContent = 'sin imágenes'; }
+}
+
+function catsElegidas(){
+  return [...document.querySelectorAll('.cat:checked')].map(e => e.value);
+}
+
+function avisarCategorias(){
+  // OASIS cubre la valencia negativa con heridas y agresión, y casi todo eso
+  // son personas. Si se activa esa categoría conviene decirlo.
+  const a = $('avisoCat');
+  if(a) a.textContent = catsElegidas().includes('Person')
+    ? '⚠ «Person» incluye imágenes angustiosas' : '';
+}
+
+async function cargarImagenes(){
+  T = null; cacheImg.clear();
+  if(!D) return;
+  const cats = catsElegidas();
+  if(!cats.length) return;
+  try{
+    const j = await (await fetch('/api/imagenes?f='
+      + encodeURIComponent(D.nombre) + '&cats=' + cats.join(','))).json();
+    if(j.error) throw new Error(j.error);
+    T = j.tramos;
+    // Se precargan para que el cambio de tramo no deje un hueco.
+    T.forEach(t => imagenDe(t.desde));
+    pintar();
+  }catch(e){ avisar('Error con las imágenes: ' + e.message, true); }
 }
 
 function construirTira(){
@@ -320,20 +409,75 @@ const JITTER = (() => {
   return out;
 })();
 
+const cacheImg = new Map();            // archivo -> HTMLImageElement
+
+function imagenDe(i){
+  if(!T || !$('conImagen').checked) return null;
+  const tr = T.find(t => i >= t.desde && i < t.hasta) || T[T.length-1];
+  if(!tr) return null;
+  let el = cacheImg.get(tr.archivo);
+  if(!el){
+    el = new Image();
+    el.src = '/oasis/' + encodeURIComponent(tr.archivo);
+    cacheImg.set(tr.archivo, el);
+  }
+  ultimoTramo = tr;
+  return el.complete && el.naturalWidth ? el : null;
+}
+
+function trazarForma(g, f, rot, cx, cy, R){
+  g.beginPath();
+  for(let k=0;k<f.lados;k++){
+    const ang = rot + k * 2*Math.PI / f.lados;
+    const rr = R * (1 + f.rugosidad * (JITTER[k % 64] - 0.5) * 2);
+    const x = cx + Math.cos(ang)*rr, y = cy + Math.sin(ang)*rr;
+    k ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.closePath();
+}
+
+function dibujarCover(g, el, w, h){
+  // La imagen cubre el lienzo sin deformarse; sobra por el lado largo.
+  const e = Math.max(w / el.naturalWidth, h / el.naturalHeight);
+  const aw = el.naturalWidth * e, ah = el.naturalHeight * e;
+  g.drawImage(el, (w - aw)/2, (h - ah)/2, aw, ah);
+}
+
 function dibujarEscena(i){
   const c = $('escena'), g = c.getContext('2d');
   const w = c.clientWidth, h = c.clientHeight;
   if(c.width !== w || c.height !== h){ c.width = w; c.height = h; }
   const [r,gg,b] = D.rgb[i];
+  const color = `rgb(${r},${gg},${b})`;
+  const el = imagenDe(i);
 
-  // El fondo lleva el color atenuado y la forma el color pleno: así se ve el
-  // color aunque la forma sea pequeña en un pasaje flojo.
+  // El fondo lleva el color atenuado: así se ve el color aunque la forma sea
+  // pequeña en un pasaje flojo.
   g.fillStyle = `rgb(${r*0.22|0},${gg*0.22|0},${b*0.22|0})`;
   g.fillRect(0, 0, w, h);
 
-  if(!$('conFormas').checked){
-    g.fillStyle = `rgb(${r},${gg},${b})`;
-    g.fillRect(0, 0, w, h);
+  const conFormas = $('conFormas').checked;
+
+  // Las tres capas, de abajo arriba: imagen, filtro de color, máscara de
+  // forma. La máscara va primero en el código porque recortar es un `clip`
+  // que condiciona todo lo que se pinte después.
+  const pintarCapas = () => {
+    if(el){
+      dibujarCover(g, el, w, h);
+      // 'color' toma matiz y saturación de lo que se pinta y la luminosidad
+      // de lo que hay debajo: eso es exactamente un filtro de color.
+      g.globalCompositeOperation = 'color';
+      g.globalAlpha = 0.8;
+      g.fillStyle = color; g.fillRect(0, 0, w, h);
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = 1;
+    }else{
+      g.fillStyle = color; g.fillRect(0, 0, w, h);
+    }
+  };
+
+  if(!conFormas){
+    g.save(); pintarCapas(); g.restore();
     return;
   }
 
@@ -349,19 +493,19 @@ function dibujarEscena(i){
 
   const R = Math.min(w, h) * 0.40 * f.escala;
   const cx = w/2, cy = h/2;
-  g.beginPath();
-  for(let k=0;k<f.lados;k++){
-    const ang = rot + k * 2*Math.PI / f.lados;
-    const rr = R * (1 + f.rugosidad * (JITTER[k % 64] - 0.5) * 2);
-    const x = cx + Math.cos(ang)*rr, y = cy + Math.sin(ang)*rr;
-    k ? g.lineTo(x, y) : g.moveTo(x, y);
-  }
-  g.closePath();
-  g.fillStyle = `rgb(${r},${gg},${b})`;
-  g.shadowColor = `rgb(${r},${gg},${b})`;
-  g.shadowBlur = 40 * f.escala;
-  g.fill();
-  g.shadowBlur = 0;
+
+  // El halo se pinta antes del recorte, porque un `clip` lo cortaría.
+  g.save();
+  g.shadowColor = color; g.shadowBlur = 40 * f.escala;
+  trazarForma(g, f, rot, cx, cy, R);
+  g.fillStyle = color; g.fill();
+  g.restore();
+
+  g.save();
+  trazarForma(g, f, rot, cx, cy, R);
+  g.clip();
+  pintarCapas();
+  g.restore();
 }
 
 function pintar(){
@@ -379,6 +523,8 @@ function pintar(){
   const f = D.formas[i];
   $('forma').textContent = `${f.lados} lados · rug ${f.rugosidad.toFixed(2).replace('.',',')}`
                          + ` · ${Math.round(f.giro)}°/s`;
+  $('img').textContent = ultimoTramo
+    ? `${ultimoTramo.tema} (${ultimoTramo.categoria})` : '—';
   dibujarFranja();
 }
 
@@ -395,6 +541,7 @@ async function cargar(){
     construirTira();
     $('audio').src = '/audio/' + encodeURIComponent(f);
     avisar(`${D.rgb.length} bloques · ${D.duracion.toFixed(1)} s · modelo ${D.modelo} — dale al play`);
+    cargarImagenes();
   }catch(e){ avisar('Error al analizar: ' + e.message, true); }
   finally{ $('cargar').disabled = false; }
 }
@@ -420,8 +567,10 @@ $('franja').onclick = e => {
   pintar();
 };
 $('conFormas').onchange = () => pintar();
+$('conImagen').onchange = () => pintar();
 window.addEventListener('resize', () => { if(D) pintar(); });
-listar(true);                       // analiza la primera canción al abrir
+listarCategorias();
+listar(true);           // analiza la primera canción al abrir
 </script></body></html>
 """
 

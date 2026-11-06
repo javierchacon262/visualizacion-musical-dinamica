@@ -1,4 +1,4 @@
-.PHONY: ayuda setup datos datos-min verificar extraer entrenar pista demo visor limpiar
+.PHONY: ayuda setup datos datos-min imagenes verificar extraer entrenar pista demo visor limpiar
 
 VENV := .venv/bin
 PY   := $(VENV)/python
@@ -9,6 +9,7 @@ ayuda:
 	@echo "  make setup       crea el entorno virtual e instala todo"
 	@echo "  make datos       descarga el corpus DEAM (~1.3 GB)"
 	@echo "  make datos-min   solo anotaciones (4.6 MB, sin audio)"
+	@echo "  make imagenes    descarga OASIS (900 imágenes, 92 MB)"
 	@echo "  make verificar   comprueba entorno, GPU y datos"
 	@echo "  make extraer     procesa el corpus y guarda las características"
 	@echo "  make entrenar    entrena y evalúa el MLP y el Conv1D"
@@ -27,6 +28,9 @@ datos:
 
 datos-min:
 	@python3 scripts/descargar_datos.py --solo-anotaciones
+
+imagenes:
+	@python3 scripts/descargar_imagenes.py
 
 verificar: | $(PY)
 	@$(PY) scripts/verificar.py
