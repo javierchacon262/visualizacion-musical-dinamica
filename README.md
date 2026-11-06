@@ -296,15 +296,16 @@ unos 20 tramos.
 
 OASIS es un conjunto afectivo, no un banco de imágenes agradables: para cubrir
 la valencia negativa incluye heridas, agresión y escenas angustiosas, y casi
-todo eso cae en la categoría `Person`. **El visor filtra por categoría y trae
-`Person` desactivada**, con un aviso si se reactiva.
+todo eso cae en la categoría `Person`. La categoría `Person` **queda fuera del corpus**, no solo desmarcada en la
+interfaz: se filtra al cargar, así que no puede aparecer ni pasando la
+categoría a mano en la URL. Quedan 554 imágenes.
 
 | categoría | n | por defecto |
 |---|---:|---|
 | Object | 200 | ✅ |
 | Scene | 220 | ✅ |
 | Animal | 134 | ✅ |
-| Person | 346 | ❌ |
+| ~~Person~~ | 346 | excluida del corpus |
 
 ## Formas
 
@@ -316,19 +317,53 @@ La regularidad es la **angularidad**. Bar y Neta (2006) mostraron que un
 contorno de vértices agudos se percibe como amenazante y uno curvo como seguro,
 incluso en objetos sin significado — un eje que ya corre paralelo a la valencia.
 
-| parámetro | lo gobierna | de | a |
-|---|---|---|---|
-| lados | valencia | 3 (agudo) | 24 (círculo) |
-| rugosidad | activación | 0.05 | 0.45 |
-| giro | activación | 2 °/s | 60 °/s |
-| escala | **energía RMS** | 0.18 | 1.0 |
+El contorno es una **superfórmula de Gielis (2003)** en polares:
 
-El tamaño lo gobierna el RMS y no la red, por la misma razón que el brillo: un
-silencio tiene que verse pequeño aunque el modelo prediga lo que sea.
-
-```bash
-python src/formas.py    # verificación de los cuatro cuadrantes
 ```
+r(θ) = [ |cos(mθ/4)|^n2 + |sin(mθ/4)|^n3 ] ^ (−1/n1)
+```
+
+Con cuatro números da estrellas, flores, lentes, púas y círculos. Encima va una
+ondulación de m lóbulos y una distorsión armónica que produce las puntas largas.
+
+| parámetro | lo gobierna | efecto |
+|---|---|---|
+| `n1` | valencia | 0.16 púas ↔ 5.0 redondo |
+| `m` | activación (¾) y valencia (¼) | 3 a 17 lóbulos, **entero** |
+| `ondulacion` | activación × valencia | engorda los lóbulos |
+| `espigas` | activación × (1 − valencia) | puntas largas y finas |
+| `giro` | activación | 3 a 95 °/s |
+| `escala` | **energía RMS** | 0.18 a 1.0 |
+
+Lo que sale en cada cuadrante:
+
+| cuadrante | silueta |
+|---|---|
+| tensión (V− A+) | estrella de 17 agujas |
+| alegría (V+ A+) | flor de 13 pétalos carnosos |
+| calma (V+ A−) | círculo liso |
+| tristeza (V− A−) | estrella de 7 puntas afiladas |
+
+### Por qué los cambios son abruptos
+
+Tres decisiones deliberadas, porque con mapeos suaves la silueta apenas se movía:
+
+1. **Parámetros enteros.** `m` y `armonico` no interpolan: saltan.
+2. **Ganancia alta.** La respuesta es una tanh de pendiente fuerte en el centro.
+3. **Estirado por canción.** El modelo predice comprimido —la valencia rara vez
+   sale de [−0.5, +0.6]— así que `va_a_forma_lote` lleva el rango de esa canción
+   a [−1, 1] por percentiles. Sin eso se usaba un tercio del vocabulario. Es una
+   decisión de presentación, como la calibración de color: `estirar=False` la
+   desactiva.
+
+Dos detalles de implementación que conviene conocer:
+
+- **La asimetría se apaga cuando `n1` es pequeño.** Ahí `r = base^(−1/n1)` es
+  brutalmente sensible y, con `n2 ≠ n3`, lóbulos alternos colapsan en pelos de
+  un píxel. `python src/formas.py` tiene una comprobación que caza eso.
+- **El navegador replica `radio()`.** Se manda el parámetro y no la silueta
+  porque son 540 bloques por canción, y 420 vértices de cada uno serían
+  megabytes de JSON. Si cambia una, hay que cambiar la otra.
 
 Es un mapeo paramétrico, no un modelo generativo. Una GAN condicionada a
 (valencia, activación) iría **después** de esta etapa, no en lugar del Conv1D:

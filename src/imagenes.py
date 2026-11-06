@@ -26,12 +26,15 @@ import config as cfg
 # OASIS valora de 1 a 7, con 4 en el centro.
 _CENTRO, _RADIO = 4.0, 3.0
 
-CATEGORIAS = ("Object", "Scene", "Animal", "Person")
+CATEGORIAS = ("Object", "Scene", "Animal")
+POR_DEFECTO = CATEGORIAS
 
-# Por defecto se deja fuera `Person`. OASIS es un conjunto afectivo, no un banco
-# de imágenes agradables: para cubrir la valencia negativa incluye heridas y
-# agresión, y casi todo eso son personas. El visor permite volver a activarla.
-POR_DEFECTO = ("Object", "Scene", "Animal")
+# `Person` (346 de las 900) queda FUERA del corpus, no solo desmarcada en la
+# interfaz. OASIS es un conjunto afectivo, no un banco de imágenes agradables:
+# cubre la valencia negativa con desnudos, heridas y agresión, y casi todo eso
+# son personas. Se filtra en `cargar()` para que no pueda colarse ni pasando la
+# categoría a mano en la URL.
+EXCLUIDAS = ("Person",)
 
 
 @lru_cache(maxsize=1)
@@ -44,6 +47,8 @@ def cargar() -> list[dict]:
     salida = []
     with open(cfg.OASIS_CSV, newline="", encoding="utf-8-sig") as f:
         for fila in csv.DictReader(f):
+            if fila["Category"].strip() in EXCLUIDAS:
+                continue
             tema = fila["Theme"].strip()
             archivo = f"{tema}.jpg"
             if not (cfg.OASIS_IMG / archivo).exists():
@@ -137,8 +142,8 @@ def _verificar() -> int:
         print(f"  {cat:<10}{n:>5}{f'{min(v):+.2f} .. {max(v):+.2f}':>22}"
               f"{f'{min(a):+.2f} .. {max(a):+.2f}':>22}")
 
-    print(f"\n  Recuperación por cuadrante (categorías por defecto: "
-          f"{', '.join(POR_DEFECTO)})\n")
+    print(f"\n  Excluidas del corpus: {', '.join(EXCLUIDAS)}")
+    print(f"  Recuperación por cuadrante ({', '.join(POR_DEFECTO)})\n")
     print(f"  {'cuadrante':<20}{'imagen':<28}{'categoría':<10}{'V':>7}{'A':>7}")
     for nombre, v, a in [("tensión  (V− A+)", -0.7, 0.5),
                          ("alegría  (V+ A+)", 0.7, 0.5),

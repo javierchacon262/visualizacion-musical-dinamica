@@ -354,11 +354,10 @@ function catsElegidas(){
 }
 
 function avisarCategorias(){
-  // OASIS cubre la valencia negativa con heridas y agresión, y casi todo eso
-  // son personas. Si se activa esa categoría conviene decirlo.
+  // Las imágenes de personas no están en el corpus (ver imagenes.EXCLUIDAS),
+  // así que aquí solo queda avisar si no queda ninguna categoría activa.
   const a = $('avisoCat');
-  if(a) a.textContent = catsElegidas().includes('Person')
-    ? '⚠ «Person» incluye imágenes angustiosas' : '';
+  if(a) a.textContent = catsElegidas().length ? '' : '⚠ sin categorías: no hay imagen';
 }
 
 async function cargarImagenes(){
@@ -401,19 +400,11 @@ function dibujarFranja(){
   g.fillStyle = '#fff'; g.fillRect(x - 1, 0, 2, c.height);
 }
 
-// Deformación fija por vértice: si se sorteara en cada cuadro la silueta
-// hervería. Así la forma es estable y lo único que se mueve es el giro.
-const JITTER = (() => {
-  let x = 1337, out = [];
-  for(let i=0;i<64;i++){ x = (x*1103515245 + 12345) & 0x7fffffff; out.push(x/0x7fffffff); }
-  return out;
-})();
-
 const cacheImg = new Map();            // archivo -> HTMLImageElement
 
 function imagenDe(i){
   if(!T || !$('conImagen').checked) return null;
-  const tr = T.find(t => i >= t.desde && i < t.hasta) || T[T.length-1];
+  const tr = T.find(t => i >= t.desde && i < t.hasta) || T[T.length - 1];
   if(!tr) return null;
   let el = cacheImg.get(tr.archivo);
   if(!el){
@@ -425,22 +416,53 @@ function imagenDe(i){
   return el.complete && el.naturalWidth ? el : null;
 }
 
-function trazarForma(g, f, rot, cx, cy, R){
-  g.beginPath();
-  for(let k=0;k<f.lados;k++){
-    const ang = rot + k * 2*Math.PI / f.lados;
-    const rr = R * (1 + f.rugosidad * (JITTER[k % 64] - 0.5) * 2);
-    const x = cx + Math.cos(ang)*rr, y = cy + Math.sin(ang)*rr;
-    k ? g.lineTo(x, y) : g.moveTo(x, y);
-  }
-  g.closePath();
-}
-
 function dibujarCover(g, el, w, h){
   // La imagen cubre el lienzo sin deformarse; sobra por el lado largo.
   const e = Math.max(w / el.naturalWidth, h / el.naturalHeight);
   const aw = el.naturalWidth * e, ah = el.naturalHeight * e;
   g.drawImage(el, (w - aw)/2, (h - ah)/2, aw, ah);
+}
+
+const NV = 420;                        // vértices por contorno
+
+// Réplica de formas.radio(). Si cambia una, hay que cambiar la otra: se manda
+// el parámetro y no la silueta porque son 540 bloques por canción, y enviar
+// 420 vértices de cada uno serían megabytes de JSON.
+function perfil(f){
+  const rs = new Float64Array(NV);
+  let pico = 0;
+  for(let k=0;k<NV;k++){
+    const th = k * 2*Math.PI / NV, t = f.m * th / 4;
+    const base = Math.pow(Math.abs(Math.cos(t)), f.n2)
+               + Math.pow(Math.abs(Math.sin(t)), f.n3);
+    let r = Math.pow(Math.max(base, 1e-9), -1/f.n1);
+    r *= (1 + (f.ondulacion || 0) * Math.cos(f.m * th));
+    r *= (1 + f.espigas * Math.cos(f.armonico * th));
+    rs[k] = r; if(r > pico) pico = r;
+  }
+  if(pico > 0) for(let k=0;k<NV;k++) rs[k] /= pico;
+  return rs;
+}
+
+// El perfil solo depende de los parámetros, y hay 540 bloques pero pocos
+// juegos distintos: se cachean por clave para no recalcular en cada cuadro.
+const cachePerfil = new Map();
+function perfilDe(f){
+  const k = `${f.m}|${f.n1}|${f.n2}|${f.n3}|${f.ondulacion}|${f.espigas}|${f.armonico}`;
+  let r = cachePerfil.get(k);
+  if(!r){ r = perfil(f); cachePerfil.set(k, r); }
+  return r;
+}
+
+function trazarForma(g, f, rot, cx, cy, R){
+  const rs = perfilDe(f);
+  g.beginPath();
+  for(let k=0;k<NV;k++){
+    const th = rot + k * 2*Math.PI / NV, rr = R * rs[k];
+    const x = cx + Math.cos(th)*rr, y = cy + Math.sin(th)*rr;
+    k ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.closePath();
 }
 
 function dibujarEscena(i){
@@ -521,7 +543,8 @@ function pintar(){
   $('a').textContent   = D.activacion[i].toFixed(2).replace('.', ',');
   $('rgb').textContent = `${r}, ${g}, ${b}`;
   const f = D.formas[i];
-  $('forma').textContent = `${f.lados} lados · rug ${f.rugosidad.toFixed(2).replace('.',',')}`
+  $('forma').textContent = `m${f.m} · n1 ${f.n1.toFixed(1).replace('.',',')}`
+                         + ` · púas ${f.espigas.toFixed(2).replace('.',',')}`
                          + ` · ${Math.round(f.giro)}°/s`;
   $('img').textContent = ultimoTramo
     ? `${ultimoTramo.tema} (${ultimoTramo.categoria})` : '—';
