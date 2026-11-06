@@ -30,6 +30,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 import color as col
 import config as cfg
+import formas as fm
 import visualizar as vis
 
 EXTENSIONES = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
@@ -53,6 +54,15 @@ def _analizar(nombre: str) -> dict:
     pred = vis.predecir(X, _modelo)
     rgb, val, aro = vis.construir_colores(pred, rms, 5)
 
+    energia = col.normalizar_energia(rms)
+    formas = fm.va_a_forma_lote(val, aro, energia)
+
+    # El giro se integra aquí y no en el navegador: así la rotación es una
+    # función determinista del instante, y saltar a mitad de canción deja la
+    # forma donde le toca en vez de donde la hubiera dejado la animación.
+    giros = np.array([f["giro"] for f in formas], dtype=float)
+    acum = np.concatenate([[0.0], np.cumsum(giros[:-1]) / cfg.HZ_ANOT])
+
     datos = {
         "nombre": nombre,
         "duracion": round(dur, 2),
@@ -61,6 +71,8 @@ def _analizar(nombre: str) -> dict:
         "valencia": [round(float(v), 4) for v in val],
         "activacion": [round(float(a), 4) for a in aro],
         "rgb": [[int(c) for c in fila] for fila in rgb],
+        "formas": formas,
+        "giro_acumulado": [round(float(g), 2) for g in acum],
     }
     with _cerrojo:
         _cache[nombre] = datos
@@ -199,8 +211,11 @@ select,button{background:var(--panel);color:var(--tinta);border:1px solid var(--
 button:hover:not(:disabled){border-color:var(--acento)}
 button:disabled{opacity:.45;cursor:default}
 .escenario{display:flex;gap:20px;align-items:stretch;flex-wrap:wrap}
-#color{flex:1 1 440px;min-height:320px;border-radius:14px;background:#000;
-       transition:background-color .12s linear}
+#escena{flex:1 1 440px;min-height:340px;border-radius:14px;background:#000;
+        display:block}
+label.conm{display:flex;align-items:center;gap:7px;font-size:14px;color:var(--suave);
+           cursor:pointer;user-select:none}
+label.conm input{accent-color:var(--acento);width:16px;height:16px;cursor:pointer}
 .lateral{width:260px;display:flex;flex-direction:column;gap:14px;flex-shrink:0}
 .disco{position:relative;width:260px;height:260px}
 .disco img{width:100%;height:100%;display:block}
@@ -225,11 +240,12 @@ audio{width:100%;height:38px}
   <select id="sel"></select>
   <button id="cargar">Analizar</button>
   <button id="recargar" title="Volver a leer la carpeta demo/">↻ carpeta</button>
+  <label class="conm"><input type="checkbox" id="conFormas" checked> formas</label>
   <span id="aviso"></span>
 </div>
 
 <div class="escenario">
-  <div id="color"></div>
+  <canvas id="escena"></canvas>
   <div class="lateral">
     <div class="disco">
       <img src="/disco.png" alt="Plano valencia-activación">
@@ -250,6 +266,7 @@ audio{width:100%;height:38px}
   <span>valencia <b id="v">—</b></span>
   <span>activación <b id="a">—</b></span>
   <span>RGB <b id="rgb">—</b></span>
+  <span>forma <b id="forma">—</b></span>
 </div>
 
 <script>
@@ -295,18 +312,73 @@ function dibujarFranja(){
   g.fillStyle = '#fff'; g.fillRect(x - 1, 0, 2, c.height);
 }
 
+// Deformación fija por vértice: si se sorteara en cada cuadro la silueta
+// hervería. Así la forma es estable y lo único que se mueve es el giro.
+const JITTER = (() => {
+  let x = 1337, out = [];
+  for(let i=0;i<64;i++){ x = (x*1103515245 + 12345) & 0x7fffffff; out.push(x/0x7fffffff); }
+  return out;
+})();
+
+function dibujarEscena(i){
+  const c = $('escena'), g = c.getContext('2d');
+  const w = c.clientWidth, h = c.clientHeight;
+  if(c.width !== w || c.height !== h){ c.width = w; c.height = h; }
+  const [r,gg,b] = D.rgb[i];
+
+  // El fondo lleva el color atenuado y la forma el color pleno: así se ve el
+  // color aunque la forma sea pequeña en un pasaje flojo.
+  g.fillStyle = `rgb(${r*0.22|0},${gg*0.22|0},${b*0.22|0})`;
+  g.fillRect(0, 0, w, h);
+
+  if(!$('conFormas').checked){
+    g.fillStyle = `rgb(${r},${gg},${b})`;
+    g.fillRect(0, 0, w, h);
+    return;
+  }
+
+  const f = D.formas[i];
+  // Giro interpolado entre bloques, a partir de la integral que manda el
+  // servidor: el mismo instante da siempre la misma rotación.
+  const t = $('audio').currentTime * D.hz;
+  const i0 = Math.max(0, Math.min(Math.floor(t), D.giro_acumulado.length - 1));
+  const i1 = Math.min(i0 + 1, D.giro_acumulado.length - 1);
+  const gr = D.giro_acumulado[i0]
+           + (D.giro_acumulado[i1] - D.giro_acumulado[i0]) * (t - i0);
+  const rot = gr * Math.PI / 180;
+
+  const R = Math.min(w, h) * 0.40 * f.escala;
+  const cx = w/2, cy = h/2;
+  g.beginPath();
+  for(let k=0;k<f.lados;k++){
+    const ang = rot + k * 2*Math.PI / f.lados;
+    const rr = R * (1 + f.rugosidad * (JITTER[k % 64] - 0.5) * 2);
+    const x = cx + Math.cos(ang)*rr, y = cy + Math.sin(ang)*rr;
+    k ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.closePath();
+  g.fillStyle = `rgb(${r},${gg},${b})`;
+  g.shadowColor = `rgb(${r},${gg},${b})`;
+  g.shadowBlur = 40 * f.escala;
+  g.fill();
+  g.shadowBlur = 0;
+}
+
 function pintar(){
   if(!D) return;
   const n = D.rgb.length;
   const i = Math.max(0, Math.min(Math.floor($('audio').currentTime * D.hz), n - 1));
   const [r,g,b] = D.rgb[i];
-  $('color').style.backgroundColor = `rgb(${r},${g},${b})`;
+  dibujarEscena(i);
   $('punto').style.left = (50 + D.valencia[i]*50) + '%';
   $('punto').style.top  = (50 - D.activacion[i]*50) + '%';
   $('t').textContent   = $('audio').currentTime.toFixed(1).replace('.', ',');
   $('v').textContent   = D.valencia[i].toFixed(2).replace('.', ',');
   $('a').textContent   = D.activacion[i].toFixed(2).replace('.', ',');
   $('rgb').textContent = `${r}, ${g}, ${b}`;
+  const f = D.formas[i];
+  $('forma').textContent = `${f.lados} lados · rug ${f.rugosidad.toFixed(2).replace('.',',')}`
+                         + ` · ${Math.round(f.giro)}°/s`;
   dibujarFranja();
 }
 
@@ -347,7 +419,8 @@ $('franja').onclick = e => {
   A.currentTime = ((e.clientX - c.left) / c.width) * D.duracion;
   pintar();
 };
-window.addEventListener('resize', () => { if(D) dibujarFranja(); });
+$('conFormas').onchange = () => pintar();
+window.addEventListener('resize', () => { if(D) pintar(); });
 listar(true);                       // analiza la primera canción al abrir
 </script></body></html>
 """

@@ -28,8 +28,9 @@ make entrenar       # entrena y evalúa el MLP y el Conv1D
 Y para ver el resultado sobre audio:
 
 ```bash
-make pista                                       # arma la pista de prueba
-make demo ARCHIVO=demo/recorrido-cuadrantes.mp3  # franja PNG + video MP4
+make pista                                   # arma las tres pistas de prueba
+make visor                                   # visor web en vivo
+make demo ARCHIVO=demo/cuadrantes.mp3        # franja PNG + video MP4
 ```
 
 Y para comprobar que todo quedó bien:
@@ -226,13 +227,67 @@ apagados. `entrenar.py` mide el factor sobre el conjunto de test y guarda
 correlación**, que es lo que mide el acierto: solo la escala. Para ver la salida
 cruda, `--sin-calibrar`.
 
+### Acierta la activación, falla la valencia
+
+Acierto de cuadrante sobre las 271 canciones de test, usando la media por
+canción:
+
+| cuadrante real | n | acierto | se confunde con |
+|---|---:|---:|---|
+| alegría (V+ A+) | 155 | **84 %** | — |
+| tristeza (V− A−) | 62 | **71 %** | — |
+| tensión (V− A+) | 33 | **39 %** | alegría ×15 |
+| **calma (V+ A−)** | 21 | **5 %** | **tristeza ×14** |
+| total | 271 | 69 % | |
+
+Los dos cuadrantes que salen bien son los que se separan por activación.
+Los dos que fallan —tensión y calma— son justo los que exigen acertar la
+**valencia** a activación dada. No es falta de datos: train tiene 161 canciones
+de calma (13 %). Es que con MSE y una activación media de +0.135 en el corpus,
+apostar por activación positiva sale barato, y las canciones calmadas extremas
+se arrastran al otro lado del cero.
+
+Sobre ocho canciones elegidas en el extremo de cada cuadrante, el modelo acierta
+**8 de 8** en alegría y **0 de 8** en calma.
+
 ### Sobre audio real
 
-La pista de `make pista` empalma seis fragmentos de DEAM en los extremos de los
-cuatro cuadrantes. **Cinco de los seis** caen en el cuadrante correcto. El que
-falla está anotado como *calma* (V +0.65, A −0.47) y se predice como tensión
-(V −0.22, A +0.54): es una pieza densa y brillante, y el modelo lee timbre y
-energía, no armonía ni letra.
+`make pista` arma tres pistas de demostración, cada una empalmando seis
+fragmentos de DEAM elegidos en el extremo de su cuadrante:
+
+| pista | qué enseña |
+|---|---|
+| `alegria-tristeza` | los dos cuadrantes que el modelo maneja — amarillo ↔ azul |
+| `cuadrantes` | los cuatro: **cinco de seis** correctos |
+| `calma-alegria` | el fallo sistemático en calma |
+
+## Formas
+
+`src/formas.py` mapea el mismo par (valencia, activación) a la forma de un
+polígono, con el mismo criterio que el color: una regularidad perceptual ya
+medida, fuera de la red, cambiable sin reentrenar.
+
+La regularidad es la **angularidad**. Bar y Neta (2006) mostraron que un
+contorno de vértices agudos se percibe como amenazante y uno curvo como seguro,
+incluso en objetos sin significado — un eje que ya corre paralelo a la valencia.
+
+| parámetro | lo gobierna | de | a |
+|---|---|---|---|
+| lados | valencia | 3 (agudo) | 24 (círculo) |
+| rugosidad | activación | 0.05 | 0.45 |
+| giro | activación | 2 °/s | 60 °/s |
+| escala | **energía RMS** | 0.18 | 1.0 |
+
+El tamaño lo gobierna el RMS y no la red, por la misma razón que el brillo: un
+silencio tiene que verse pequeño aunque el modelo prediga lo que sea.
+
+```bash
+python src/formas.py    # verificación de los cuatro cuadrantes
+```
+
+Es un mapeo paramétrico, no un modelo generativo. Una GAN condicionada a
+(valencia, activación) iría **después** de esta etapa, no en lugar del Conv1D:
+el cuello de botella de la predicción es el ruido de etiqueta, no la capacidad.
 
 ---
 
@@ -249,10 +304,12 @@ energía, no armonía ni letra.
 ├── src/
 │   ├── config.py             rutas y constantes
 │   ├── color.py              Russell → HSV, verificado en 4 cuadrantes
+│   ├── formas.py             Russell → polígono, verificado en 4 cuadrantes
 │   ├── features.py           extracción alineada con las anotaciones
 │   ├── extraer.py            corre el corpus en paralelo
 │   ├── entrenar.py           MLP y Conv1D, evaluación descompuesta
-│   └── visualizar.py         canción → franja PNG y video MP4
+│   ├── visualizar.py         canción → franja PNG y video MP4
+│   └── servidor.py           visor web (biblioteca estándar)
 ├── demo/                     tu audio (ignorado por git salvo el README)
 └── data/                     (ignorado por git) corpus y características
 ```
@@ -272,6 +329,8 @@ energía, no armonía ni letra.
 | CRNN | pendiente |
 | Autoencoder (no supervisado) | pendiente |
 | Renderizado de video | ✅ |
+| Visor web en vivo | ✅ |
+| Mapeo a formas (paramétrico) | ✅ |
 
 Métricas: RMSE y correlación de Pearson, **separadas en componente entre
 canciones y dentro de canción**, reportadas contra el techo humano.

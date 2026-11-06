@@ -18,17 +18,23 @@ Produce dos cosas en `outputs/`:
 Acepta mp3, wav, m4a, flac y ogg. Cuatro minutos de audio se renderizan en
 menos de dos.
 
-## La pista de prueba
+## Las pistas de prueba
 
 ```bash
-python scripts/pista_demo.py
+python scripts/pista_demo.py                      # las tres
+python scripts/pista_demo.py --pista calma-alegria
 ```
 
-Empalma seis fragmentos de DEAM elegidos en los extremos de los cuatro
-cuadrantes del plano valencia–activación. El color cambia de forma visible al
-pasar de uno a otro, así que sirve para comprobar de un vistazo que todo
-funciona. **Cinco de los seis** caen en el cuadrante correcto; el sexto, una
-pieza anotada como *calma*, se predice como tensión.
+Cada una empalma seis fragmentos de DEAM elegidos en el extremo de su cuadrante.
+
+| pista | qué enseña |
+|---|---|
+| `alegria-tristeza` | **para enseñar que funciona** — amarillo ↔ azul, los dos cuadrantes que el modelo acierta (84 % y 71 %) |
+| `cuadrantes` | los cuatro cuadrantes; cinco de seis correctos |
+| `calma-alegria` | **enseña el fallo**: el modelo acierta calma en 1 de 21 canciones de test, y la pinta como tristeza |
+
+Si vas a mostrar el sistema funcionando, usa `alegria-tristeza`. La de
+`calma-alegria` está para la conversación sobre limitaciones.
 
 Se regenera en vez de versionarse: el repositorio guarda la receta, no los 6 MB
 de audio derivado. El audio de DEAM tiene licencia Creative Commons, así que
