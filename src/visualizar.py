@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import color as col
 import config as cfg
 import features as ft
+import formas as fm
+import imagenes as im
 
 warnings.filterwarnings("ignore")
 MODELOS = cfg.SALIDA_DIR / "modelos"
@@ -143,126 +145,242 @@ def _disco_circumplejo(lado: int) -> tuple[np.ndarray, np.ndarray]:
     return rgb, dentro
 
 
-def render_video(rgb, val, aro, audio: Path, destino: Path, fps: int = 20,
-                 ancho: int = 1280, alto: int = 720) -> None:
-    """
-    Compone el video cuadro a cuadro en numpy y lo canaliza a ffmpeg.
+def _fuente(candidatos, tam):
+    """Las rutas de fuentes cambian entre distribuciones: se prueban varias."""
+    from PIL import ImageFont
+    for ruta in candidatos:
+        try:
+            return ImageFont.truetype(ruta, tam)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
-    Se hace así y no con matplotlib porque una canción de 4 minutos son más de
-    5000 cuadros: armar cada uno como figura cuesta minutos, armarlo como
-    arreglo cuesta segundos.
+
+MONO = ["/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]
+SANS = ["/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+
+
+def _cubrir(src, w: int, h: int):
+    """Redimensiona la imagen para cubrir w×h sin deformarla."""
+    from PIL import Image
+    e = max(w / src.width, h / src.height)
+    src = src.resize((max(1, int(src.width * e)), max(1, int(src.height * e))),
+                     Image.LANCZOS)
+    x, y = (src.width - w) // 2, (src.height - h) // 2
+    return src.crop((x, y, x + w, y + h))
+
+
+def _tenir(lum, c, alfa: float):
     """
-    from PIL import Image, ImageDraw, ImageFont
+    Filtro de color: conserva la luminosidad de la foto y le impone el matiz y
+    la saturación del color que predice el modelo.
+
+    Es el equivalente al modo de fusión 'color' del lienzo que usa el visor.
+    `lum` llega ya en escala de grises para no reconvertirla en cada cuadro.
+    """
+    from PIL import Image
+    tinte = Image.new("RGB", lum.size, c).convert("HSV")
+    h, sat, _ = tinte.split()
+    tenida = Image.merge("HSV", (h, sat, lum)).convert("RGB")
+    if alfa >= 1.0:
+        return tenida
+    return Image.blend(lum.convert("RGB"), tenida, alfa)
+
+
+def _mascara_forma(f: dict, w: int, h: int, rot: float, theta):
+    """Máscara en blanco y negro con la silueta de la superfórmula."""
+    from PIL import Image, ImageDraw
+    r = fm.radio(theta, f) * (min(w, h) * 0.46) * f["escala"]
+    cx, cy = w / 2, h / 2
+    pts = [(cx + np.cos(t + rot) * rr, cy + np.sin(t + rot) * rr)
+           for t, rr in zip(theta, r)]
+    m = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(m).polygon(pts, fill=255)
+    return m
+
+
+def render_video(rgb, val, aro, audio: Path, destino: Path, fps: int = 20,
+                 ancho: int = 1600, alto: int = 900,
+                 alfa_figura: float = fm.ALFA_FIGURA,
+                 con_imagen: bool = True) -> None:
+    """
+    Compone el video cuadro a cuadro con PIL y lo canaliza a ffmpeg.
+
+    Se hace así y no con matplotlib porque una canción de cuatro minutos son
+    más de 5 000 cuadros: armar cada uno como figura cuesta minutos.
+
+    El cuadro enseña las tres capas a la vez — la composición grande, y debajo
+    las miniaturas de cada paso — para que se vea cómo se aplican y no solo el
+    resultado.
+    """
+    from PIL import Image, ImageDraw
 
     T = len(rgb)
     dur = T / cfg.HZ_ANOT
     n_frames = max(1, int(dur * fps))
+    theta = np.linspace(0, 2 * np.pi, 420, endpoint=False)
+
+    # ── parámetros por bloque ──
+    formas = fm.va_a_forma_lote(val, aro, _escala_desde_rgb(rgb))
+    giros = np.array([f["giro"] for f in formas], dtype=float)
+    giro_acum = np.concatenate([[0.0], np.cumsum(giros[:-1]) / cfg.HZ_ANOT])
+
+    tramos = []
+    if con_imagen:
+        try:
+            tramos = im.secuencia(val, aro)
+        except Exception as e:
+            print(f"  ! sin capa de imagen ({e})", file=sys.stderr)
 
     # ── geometría ──
-    M = 40                                   # margen
-    disco_lado = 300
-    bloque_w = ancho - disco_lado - 3 * M
-    bloque_h = 430
-    y_bloque = M
-    y_tira, tira_h = 540, 70
-    disco, mascara = _disco_circumplejo(disco_lado)
-    x_disco = ancho - M - disco_lado
-
-    # la franja completa, estirada al ancho disponible
+    M = 40
+    pw, ph = 1000, 516                       # composición principal
+    dl = 430                                 # disco
+    x_disco, y_disco = ancho - M - dl, M
+    tw, th_ = 240, 132                       # miniaturas de cada capa
+    y_min = M + ph + 46                      # fila de miniaturas
+    y_tira, tira_h = alto - 130, 54
     tira_w = ancho - 2 * M
+
+    if y_min + th_ > y_tira - 8:             # el cuadro no es de goma
+        raise ValueError(f"las miniaturas invaden la franja "
+                         f"({y_min + th_} > {y_tira - 8})")
+
+    disco, mask_disco = _disco_circumplejo(dl)
     idx = np.linspace(0, T - 1, tira_w).astype(int)
     tira = np.repeat(rgb[idx][np.newaxis, :, :], tira_h, axis=0)
 
-    # Las rutas de fuentes cambian entre distribuciones: se prueban varias y
-    # se cae a la de Pillow si no hay ninguna.
-    def _fuente(candidatos, tam):
-        for ruta in candidatos:
-            try:
-                return ImageFont.truetype(ruta, tam)
-            except OSError:
-                continue
-        return ImageFont.load_default()
+    fuente = _fuente(MONO, 20)
+    f_rot = _fuente(SANS, 17)
+    f_lbl = _fuente(SANS, 15)
 
-    fuente = _fuente([
-        "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    ], 20)
-    fuente_lbl = _fuente([
-        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ], 15)
+    FONDO = (15, 21, 25)
+    cache_img: dict[str, tuple] = {}         # archivo -> (cubierta, luminosidad)
 
-    tmp = destino.with_suffix(".sinaudio.mp4")
-    ff = subprocess.Popen(
+    def capas(i: int, w: int, h: int):
+        """Devuelve (fondo, figura) ya compuestas para el bloque i."""
+        c = tuple(int(x) for x in rgb[i])
+        tr = next((t for t in tramos if t["desde"] <= i < t["hasta"]),
+                  tramos[-1] if tramos else None)
+        if tr is None:
+            base = Image.new("RGB", (w, h), c)
+            return Image.new("RGB", (w, h), tuple(int(x * fm.ATENUACION_FONDO)
+                                                  for x in c)), base, None
+        clave = f"{tr['archivo']}|{w}x{h}"
+        if clave not in cache_img:
+            src = Image.open(cfg.OASIS_IMG / tr["archivo"]).convert("RGB")
+            cub = _cubrir(src, w, h)
+            cache_img[clave] = (cub, cub.convert("L"))
+        cub, lum = cache_img[clave]
+        figura = _tenir(lum, c, fm.ALFA_COLOR)
+        fondo = Image.eval(figura, lambda v: int(v * fm.ATENUACION_FONDO))
+        return fondo, figura, cub
+
+    escritor = subprocess.Popen(
         ["ffmpeg", "-y", "-loglevel", "error",
          "-f", "rawvideo", "-pix_fmt", "rgb24",
          "-s", f"{ancho}x{alto}", "-r", str(fps), "-i", "-",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-         "-pix_fmt", "yuv420p", str(tmp)],
+         "-pix_fmt", "yuv420p", str(destino.with_suffix(".sinaudio.mp4"))],
         stdin=subprocess.PIPE)
 
-    FONDO = np.array([15, 21, 25], dtype=np.uint8)
     try:
-        for f in range(n_frames):
-            i = min(int(f / fps * cfg.HZ_ANOT), T - 1)
-            lienzo = np.broadcast_to(FONDO, (alto, ancho, 3)).copy()
+        for n in range(n_frames):
+            t_s = n / fps
+            i = min(int(t_s * cfg.HZ_ANOT), T - 1)
+            c = tuple(int(x) for x in rgb[i])
+            f = formas[i]
 
-            # color actual, a bloque grande
-            lienzo[y_bloque:y_bloque + bloque_h, M:M + bloque_w] = rgb[i]
+            # rotación interpolada: función determinista del instante
+            tb = t_s * cfg.HZ_ANOT
+            i0 = min(int(tb), T - 1); i1 = min(i0 + 1, T - 1)
+            gr = giro_acum[i0] + (giro_acum[i1] - giro_acum[i0]) * (tb - i0)
+            rot = np.deg2rad(gr)
 
-            # plano de Russell
-            reg = lienzo[y_bloque:y_bloque + disco_lado,
-                         x_disco:x_disco + disco_lado]
-            reg[mascara] = disco[mascara]
+            lienzo = Image.new("RGB", (ancho, alto), FONDO)
 
-            # franja temporal completa + cursor
-            lienzo[y_tira:y_tira + tira_h, M:M + tira_w] = tira
+            # ── composición principal: fondo + figura recortada ──
+            fondo, figura, cruda = capas(i, pw, ph)
+            mask = _mascara_forma(f, pw, ph, rot, theta)
+            if alfa_figura < 1.0:
+                mask = Image.eval(mask, lambda v: int(v * alfa_figura))
+            principal = fondo.copy()
+            principal.paste(figura, (0, 0), mask)
+            lienzo.paste(principal, (M, M))
+
+            # ── miniaturas: las tres capas por separado ──
+            if cruda is not None:
+                fondo_m, figura_m, cruda_m = capas(i, tw, th_)
+                mask_m = _mascara_forma(f, tw, th_, rot, theta)
+                comp_m = fondo_m.copy(); comp_m.paste(figura_m, (0, 0), mask_m)
+                minis = [(cruda_m, "1 · imagen"), (figura_m, "2 · + color"),
+                         (comp_m, "3 · + forma")]
+            else:
+                minis = []
+            for k, (mini, _) in enumerate(minis):
+                lienzo.paste(mini, (M + k * (tw + 26), y_min))
+
+            # ── disco de Russell ──
+            reg = np.array(lienzo)
+            reg[y_disco:y_disco + dl, x_disco:x_disco + dl][mask_disco] = \
+                disco[mask_disco]
+            lienzo = Image.fromarray(reg)
+
+            # ── franja temporal y cursor ──
+            lienzo.paste(Image.fromarray(tira), (M, y_tira))
+            d = ImageDraw.Draw(lienzo)
             xc = M + int(i / max(T - 1, 1) * (tira_w - 1))
-            lienzo[y_tira - 6:y_tira + tira_h + 6,
-                   max(M, xc - 1):min(M + tira_w, xc + 2)] = 255
+            d.rectangle([xc - 1, y_tira - 6, xc + 1, y_tira + tira_h + 6],
+                        fill=(255, 255, 255))
 
-            img = Image.fromarray(lienzo)
-            d = ImageDraw.Draw(img)
+            # ── punto sobre el disco y rótulos ──
+            cx = x_disco + dl / 2 * (1 + val[i])
+            cy = y_disco + dl / 2 * (1 - aro[i])
+            d.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=(255, 255, 255),
+                      outline=FONDO, width=2)
+            q = 0.62 * dl / 2
+            for txt, dx, dy in [("tensión", -q, -q), ("alegría", q, -q),
+                                ("calma", q, q), ("tristeza", -q, q)]:
+                d.text((x_disco + dl / 2 + dx, y_disco + dl / 2 + dy), txt,
+                       font=f_lbl, fill=(0, 0, 0), anchor="mm")
+            for k, (_, nom) in enumerate(minis):
+                d.text((M + k * (tw + 26), y_min - 24), nom, font=f_rot,
+                       fill=(148, 161, 175))
 
-            # punto del estado actual sobre el plano
-            cx = x_disco + disco_lado / 2 * (1 + val[i])
-            cy = y_bloque + disco_lado / 2 * (1 - aro[i])
-            d.ellipse([cx - 8, cy - 8, cx + 8, cy + 8],
-                      fill=(255, 255, 255), outline=(15, 21, 25), width=2)
-
-            # Ejes y nombres de los cuadrantes: el plano se explica solo.
-            cxd = x_disco + disco_lado / 2
-            cyd = y_bloque + disco_lado / 2
-            for t, ex, ey in [("activación +", cxd, y_bloque - 16),
-                              ("valencia +", cxd, y_bloque + disco_lado + 18)]:
-                d.text((ex, ey), t, font=fuente_lbl, fill=(130, 143, 158),
-                       anchor="mm")
-            q = 0.60 * disco_lado / 2
-            for t, dx, dy in [("tensión", -q, -q), ("alegría", q, -q),
-                              ("calma", q, q), ("tristeza", -q, q)]:
-                d.text((cxd + dx, cyd + dy), t, font=fuente_lbl,
-                       fill=(0, 0, 0), anchor="mm")
-
-            d.text((M, y_tira + tira_h + 22),
-                   f"t {f/fps:6.1f}s / {dur:.0f}s     "
-                   f"valencia {val[i]:+.2f}     activación {aro[i]:+.2f}     "
-                   f"RGB {tuple(int(x) for x in rgb[i])}",
+            d.text((M, y_tira + tira_h + 20),
+                   f"t {t_s:6.1f}s / {dur:.0f}s    "
+                   f"V {val[i]:+.2f}  A {aro[i]:+.2f}    "
+                   f"m{f['m']} n1 {f['n1']:.2f}    RGB {c}",
                    font=fuente, fill=(148, 161, 175))
 
-            ff.stdin.write(np.asarray(img, dtype=np.uint8).tobytes())
+            escritor.stdin.write(np.asarray(lienzo, dtype=np.uint8).tobytes())
     finally:
-        ff.stdin.close()
-        ff.wait()
+        escritor.stdin.close()
+        escritor.wait()
 
+    tmp = destino.with_suffix(".sinaudio.mp4")
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-i", str(tmp), "-i", str(audio),
          "-c:v", "copy", "-c:a", "aac", "-shortest", str(destino)],
         check=True)
     tmp.unlink(missing_ok=True)
+
+
+def _escala_desde_rgb(rgb: np.ndarray) -> np.ndarray:
+    """
+    Recupera la energía normalizada a partir del brillo del color.
+
+    `construir_colores` ya metió el RMS en el canal de valor; sacarlo de ahí
+    evita volver a pasar el audio por librosa solo para la escala.
+    """
+    v = rgb.max(axis=1).astype(float) / 255.0
+    return np.clip(v, 0.0, 1.0)
 
 
 def main() -> int:
@@ -276,6 +394,11 @@ def main() -> int:
     ap.add_argument("--tira", action="store_true", help="solo la franja PNG")
     ap.add_argument("--sin-calibrar", action="store_true",
                     help="predicción cruda, sin igualar varianza")
+    ap.add_argument("--alfa-figura", type=float, default=fm.ALFA_FIGURA,
+                    help=f"opacidad de la figura sobre la imagen "
+                         f"(0–1, por defecto {fm.ALFA_FIGURA})")
+    ap.add_argument("--sin-imagen", action="store_true",
+                    help="solo color y forma, sin la capa de OASIS")
     args = ap.parse_args()
 
     if not args.audio.exists():
@@ -299,7 +422,9 @@ def main() -> int:
 
     if not args.tira:
         mp4 = base.with_suffix(".mp4")
-        render_video(rgb, val, aro, args.audio, mp4)
+        render_video(rgb, val, aro, args.audio, mp4,
+                     alfa_figura=args.alfa_figura,
+                     con_imagen=not args.sin_imagen)
         print(f"  video   → {mp4}")
     return 0
 

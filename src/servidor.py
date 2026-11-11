@@ -180,7 +180,11 @@ class Manejador(BaseHTTPRequestHandler):
         ruta = u.path
 
         if ruta == "/":
-            self._enviar(PAGINA.encode(), "text/html; charset=utf-8")
+            pagina = (PAGINA
+                      .replace("__ALFA_FIGURA__", repr(fm.ALFA_FIGURA))
+                      .replace("__ALFA_COLOR__", repr(fm.ALFA_COLOR))
+                      .replace("__ATENUACION__", repr(fm.ATENUACION_FONDO)))
+            self._enviar(pagina.encode(), "text/html; charset=utf-8")
         elif ruta == "/disco.png":
             self._enviar(_disco_png(), "image/png",
                          extra={"Cache-Control": "max-age=86400"})
@@ -423,6 +427,11 @@ function dibujarCover(g, el, w, h){
   g.drawImage(el, (w - aw)/2, (h - ah)/2, aw, ah);
 }
 
+// Las mismas constantes que usa el video (formas.py), inyectadas por el
+// servidor: si se tocan allí, el visor cambia con ellas.
+const ALFA_FIGURA = __ALFA_FIGURA__, ALFA_COLOR = __ALFA_COLOR__,
+      ATEN = __ATENUACION__;
+
 const NV = 420;                        // vértices por contorno
 
 // Réplica de formas.radio(). Si cambia una, hay que cambiar la otra: se manda
@@ -475,7 +484,7 @@ function dibujarEscena(i){
 
   // El fondo lleva el color atenuado: así se ve el color aunque la forma sea
   // pequeña en un pasaje flojo.
-  g.fillStyle = `rgb(${r*0.22|0},${gg*0.22|0},${b*0.22|0})`;
+  g.fillStyle = `rgb(${r*ATEN|0},${gg*ATEN|0},${b*ATEN|0})`;
   g.fillRect(0, 0, w, h);
 
   const conFormas = $('conFormas').checked;
@@ -484,15 +493,18 @@ function dibujarEscena(i){
   // forma. La máscara va primero en el código porque recortar es un `clip`
   // que condiciona todo lo que se pinte después.
   const pintarCapas = () => {
+    // Se parte de la opacidad que ya trae el contexto (la de la figura) y se
+    // vuelve a ella: ponerla a 1 aquí pisaría ALFA_FIGURA.
+    const a0 = g.globalAlpha;
     if(el){
       dibujarCover(g, el, w, h);
       // 'color' toma matiz y saturación de lo que se pinta y la luminosidad
       // de lo que hay debajo: eso es exactamente un filtro de color.
       g.globalCompositeOperation = 'color';
-      g.globalAlpha = 0.8;
+      g.globalAlpha = a0 * ALFA_COLOR;
       g.fillStyle = color; g.fillRect(0, 0, w, h);
       g.globalCompositeOperation = 'source-over';
-      g.globalAlpha = 1;
+      g.globalAlpha = a0;
     }else{
       g.fillStyle = color; g.fillRect(0, 0, w, h);
     }
@@ -524,6 +536,7 @@ function dibujarEscena(i){
   g.restore();
 
   g.save();
+  g.globalAlpha = ALFA_FIGURA;
   trazarForma(g, f, rot, cx, cy, R);
   g.clip();
   pintarCapas();

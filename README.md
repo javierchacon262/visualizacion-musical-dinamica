@@ -164,7 +164,7 @@ mp3 → librosa 22 050 Hz mono
                     ▼
         MODELO → (valencia, activación) por bloque
                     ▼
-        suavizado temporal → color → video / demo
+        suavizado temporal → color + forma + imagen → video / visor
 ```
 
 El análisis corre a 50 Hz y *después* se agrega, en vez de calcularlo directo a
@@ -364,6 +364,21 @@ Dos detalles de implementación que conviene conocer:
 - **El navegador replica `radio()`.** Se manda el parámetro y no la silueta
   porque son 540 bloques por canción, y 420 vértices de cada uno serían
   megabytes de JSON. Si cambia una, hay que cambiar la otra.
+
+### Cuánto pesa cada capa
+
+Tres constantes en `formas.py`, compartidas por el vídeo y el visor: si se
+tocan ahí, cambian los dos.
+
+| constante | por defecto | qué hace |
+|---|---:|---|
+| `ALFA_FIGURA` | 0.92 | opacidad de la figura sobre la imagen. Con 1.0 el recorte es duro; por debajo el fondo se transparenta a través de ella |
+| `ALFA_COLOR` | 0.80 | cuánto tiñe el filtro: 0 deja la foto cruda, 1 la lleva al color pleno |
+| `ATENUACION_FONDO` | 0.28 | qué tan atenuada queda la imagen fuera de la figura |
+
+```bash
+python src/visualizar.py cancion.mp3 --alfa-figura 0.6
+```
 
 Es un mapeo paramétrico, no un modelo generativo. Una GAN condicionada a
 (valencia, activación) iría **después** de esta etapa, no en lugar del Conv1D:

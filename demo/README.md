@@ -13,10 +13,13 @@ Produce dos cosas en `outputs/`:
 | Archivo | Qué es |
 |---|---|
 | `mi-cancion.png` | la franja de color, la canción entera de un vistazo |
-| `mi-cancion.mp4` | el video sincronizado con el audio |
+| `mi-cancion.mp4` | el video sincronizado con el audio, con las tres capas y las miniaturas de cada paso |
 
-Acepta mp3, wav, m4a, flac y ogg. Cuatro minutos de audio se renderizan en
-menos de dos.
+Acepta mp3, wav, m4a, flac y ogg. Cuatro minutos y medio de audio tardan unos
+seis en renderizar, así que conviene hacerlo antes de clase.
+
+`--alfa-figura 0.6` baja la opacidad de la figura sobre la imagen;
+`--sin-imagen` deja solo color y forma.
 
 ## Las pistas de prueba
 

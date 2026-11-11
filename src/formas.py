@@ -62,6 +62,20 @@ ESCALA_MIN, ESCALA_MAX = 0.18, 1.0
 
 _GANANCIA = 2.4                   # pendiente de la respuesta en el centro
 
+# ── Composición: cuánto pesa cada capa sobre la de abajo ───────────────────
+# Opacidad de la figura sobre la imagen de fondo. Con 1.0 la figura recorta la
+# imagen de forma dura y fuera de ella solo queda el fondo atenuado; por debajo
+# de 1.0 el fondo se transparenta a través de la figura, que es lo que permite
+# enseñar las tres capas a la vez en lugar de solo el resultado.
+ALFA_FIGURA = 0.92
+
+# Cuánto tiñe el filtro de color a la imagen: 0 deja la foto cruda, 1 la lleva
+# al color pleno del modelo. Conserva siempre la luminosidad de la foto.
+ALFA_COLOR = 0.80
+
+# Qué tan atenuada queda la imagen fuera de la figura.
+ATENUACION_FONDO = 0.28
+
 
 def _ganancia(x: float) -> float:
     """[−1,1] → [0,1] con pendiente fuerte en el centro."""
