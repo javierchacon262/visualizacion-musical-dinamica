@@ -120,17 +120,24 @@ Estos condicionan cómo hay que evaluar, y conviene leerlos antes de entrenar.
 DEAM trae **10 anotadores por canción**, lo que permite medir cuánto coinciden
 entre sí:
 
-| | r entre dos anotadores | Fiabilidad del promedio de 10 |
-|---|---|---|
-| Activación | 0.132 | **0.60** |
-| Valencia | 0.071 | **0.43** |
+| | r entre dos, agrupada | r entre dos, **dentro** | **α de Cronbach por canción** |
+|---|---:|---:|---:|
+| Activación | 0.132 | 0.081 | **0.32** |
+| Valencia | 0.071 | 0.053 | **0.25** |
+
+El α por canción es la medida que usan los autores de DEAM; reproducirlo sobre
+el corpus da 0.32 y 0.25, que coincide con su Tabla 2 (0.28–0.31 y 0.20–0.28
+para 2013–2014).
 
 El 24 % de los anotadores dejó la curva plana. Dos personas anotando la misma
 canción coinciden en r ≈ 0.1: la emoción momento a momento es intrínsecamente
 subjetiva.
 
-**Ese 0.60 / 0.43 es el techo.** Un modelo que alcance r = 0.50 en activación
-está cerca del límite de lo predecible, no fallando.
+**Ese 0.32 / 0.25 es el techo de la componente dentro de canción**, que es la
+que importa aquí. Aplicar Spearman-Brown a la correlación *agrupada* da 0.60 y
+0.43, pero ese número incluye el acuerdo en distinguir unas canciones de otras:
+compararlo con `r_dentro` infla el resultado al doble. Es el mismo error que el
+hallazgo 2 describe, cometido del otro lado.
 
 ### 2. No confundir correlación agrupada con seguimiento temporal
 

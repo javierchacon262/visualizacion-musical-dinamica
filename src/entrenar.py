@@ -167,7 +167,16 @@ def entrenar_uno(nombre, X, Y, part, epochs, verbose=1):
 
 
 # ── informe ────────────────────────────────────────────────────────────────
-TECHO = {"valencia": 0.43, "activacion": 0.60}   # acuerdo entre anotadores
+# Techo de la componente DENTRO de canción: alfa de Cronbach por canción, la
+# medida que usan los autores de DEAM (Tabla 2 del artículo: 0.28–0.31 en
+# activación y 0.20–0.28 en valencia para 2013–2014). Reproducido sobre el
+# corpus completo da 0.32 y 0.25.
+#
+# NO usar aquí el 0.60 / 0.43 que sale de aplicar Spearman-Brown a la
+# correlación AGRUPADA entre dos anotadores: ese número incluye el acuerdo en
+# distinguir unas canciones de otras, y compararlo con r_dentro infla el
+# resultado al doble.
+TECHO = {"valencia": 0.25, "activacion": 0.32}
 
 
 def imprimir(nombre: str, r: dict) -> None:
