@@ -22,6 +22,15 @@ cd visualizacion-musical-dinamica
 ./setup.sh          # crea el entorno (Python 3.12 vía uv) e instala todo
 make datos          # descarga el corpus DEAM (~1.3 GB, reanudable)
 make extraer        # procesa 1802 canciones (~3 min con 22 núcleos)
+make entrenar       # entrena y evalúa el MLP y el Conv1D
+```
+
+Y para ver el resultado sobre audio:
+
+```bash
+make pista                                   # arma las tres pistas de prueba
+make visor                                   # visor web en vivo
+make demo ARCHIVO=demo/cuadrantes.mp3        # franja PNG + video MP4
 ```
 
 Y para comprobar que todo quedó bien:
@@ -111,17 +120,24 @@ Estos condicionan cómo hay que evaluar, y conviene leerlos antes de entrenar.
 DEAM trae **10 anotadores por canción**, lo que permite medir cuánto coinciden
 entre sí:
 
-| | r entre dos anotadores | Fiabilidad del promedio de 10 |
-|---|---|---|
-| Activación | 0.132 | **0.60** |
-| Valencia | 0.071 | **0.43** |
+| | r entre dos, agrupada | r entre dos, **dentro** | **α de Cronbach por canción** |
+|---|---:|---:|---:|
+| Activación | 0.132 | 0.081 | **0.32** |
+| Valencia | 0.071 | 0.053 | **0.25** |
+
+El α por canción es la medida que usan los autores de DEAM; reproducirlo sobre
+el corpus da 0.32 y 0.25, que coincide con su Tabla 2 (0.28–0.31 y 0.20–0.28
+para 2013–2014).
 
 El 24 % de los anotadores dejó la curva plana. Dos personas anotando la misma
 canción coinciden en r ≈ 0.1: la emoción momento a momento es intrínsecamente
 subjetiva.
 
-**Ese 0.60 / 0.43 es el techo.** Un modelo que alcance r = 0.50 en activación
-está cerca del límite de lo predecible, no fallando.
+**Ese 0.32 / 0.25 es el techo de la componente dentro de canción**, que es la
+que importa aquí. Aplicar Spearman-Brown a la correlación *agrupada* da 0.60 y
+0.43, pero ese número incluye el acuerdo en distinguir unas canciones de otras:
+compararlo con `r_dentro` infla el resultado al doble. Es el mismo error que el
+hallazgo 2 describe, cometido del otro lado.
 
 ### 2. No confundir correlación agrupada con seguimiento temporal
 
@@ -155,7 +171,7 @@ mp3 → librosa 22 050 Hz mono
                     ▼
         MODELO → (valencia, activación) por bloque
                     ▼
-        suavizado temporal → color → video / demo
+        suavizado temporal → color + forma + imagen → video / visor
 ```
 
 El análisis corre a 50 Hz y *después* se agrega, en vez de calcularlo directo a
@@ -177,6 +193,206 @@ sin NaN ni Inf · etiquetas en [−0.77, 0.83]
 
 ---
 
+## Resultados
+
+Dos modelos sobre las mismas características, para aislar una sola variable:
+si el modelo ve contexto temporal o no. El MLP trata cada bloque de medio
+segundo por separado; el Conv1D convoluciona a lo largo del tiempo.
+
+| correlación · test | MLP | Conv1D |
+|---|---:|---:|
+| activación · entre canciones | 0.791 | 0.790 |
+| activación · **dentro de canción** | 0.079 | **0.134** |
+| valencia · entre canciones | 0.675 | 0.649 |
+| valencia · **dentro de canción** | 0.035 | **0.056** |
+| parámetros | 18 498 | 157 890 |
+
+La fila «entre» no se mueve: para distinguir una canción intensa de una suave
+basta el nivel medio de energía, y el contexto temporal no aporta nada. La fila
+«dentro» casi se duplica. Es la asimetría que uno espera si la hipótesis es
+correcta — **el contexto temporal solo puede ayudar en la parte que depende del
+tiempo**.
+
+### La etiqueta se mueve menos que el modelo
+
+| desviación dentro de canción | activación |
+|---|---:|
+| etiqueta de DEAM | 0.035 |
+| predicción del Conv1D | 0.082 |
+
+Promediar diez anotadores cancela casi todo el vaivén dentro de un fragmento de
+30 s y deja una curva casi plana. El modelo ya oscila más que su propio
+objetivo, así que el problema no es solo seguir mal la curva: la curva de
+referencia apenas se mueve.
+
+### Calibración
+
+Una red entrenada con MSE regresa a la media — equivocarse en el centro cuesta
+menos — y comprime la dispersión en un factor 1.4. En pantalla eso da colores
+apagados. `entrenar.py` mide el factor sobre el conjunto de test y guarda
+`calibracion_<modelo>.npz`; `visualizar.py` lo aplica. **No cambia la
+correlación**, que es lo que mide el acierto: solo la escala. Para ver la salida
+cruda, `--sin-calibrar`.
+
+### Acierta la activación, falla la valencia
+
+Acierto de cuadrante sobre las 271 canciones de test, usando la media por
+canción:
+
+| cuadrante real | n | acierto | se confunde con |
+|---|---:|---:|---|
+| alegría (V+ A+) | 155 | **84 %** | — |
+| tristeza (V− A−) | 62 | **71 %** | — |
+| tensión (V− A+) | 33 | **39 %** | alegría ×15 |
+| **calma (V+ A−)** | 21 | **5 %** | **tristeza ×14** |
+| total | 271 | 69 % | |
+
+Los dos cuadrantes que salen bien son los que se separan por activación.
+Los dos que fallan —tensión y calma— son justo los que exigen acertar la
+**valencia** a activación dada. No es falta de datos: train tiene 161 canciones
+de calma (13 %). Es que con MSE y una activación media de +0.135 en el corpus,
+apostar por activación positiva sale barato, y las canciones calmadas extremas
+se arrastran al otro lado del cero.
+
+Sobre ocho canciones elegidas en el extremo de cada cuadrante, el modelo acierta
+**8 de 8** en alegría y **0 de 8** en calma.
+
+### Sobre audio real
+
+`make pista` arma tres pistas de demostración, cada una empalmando seis
+fragmentos de DEAM elegidos en el extremo de su cuadrante:
+
+| pista | qué enseña |
+|---|---|
+| `alegria-tristeza` | los dos cuadrantes que el modelo maneja — amarillo ↔ azul |
+| `cuadrantes` | los cuatro: **cinco de seis** correctos |
+| `calma-alegria` | el fallo sistemático en calma |
+
+## Imágenes
+
+La tercera capa. `src/imagenes.py` recupera de **OASIS** la imagen cuya emoción
+anotada está más cerca de la que el modelo predice en ese instante.
+
+OASIS (Kurdi, Lozano & Banaji, 2017) valora 900 imágenes en **los mismos dos
+ejes** que predice el modelo, así que el enlace no necesita un puente inventado:
+es una búsqueda de vecino más cercano en el plano (valencia, activación). Es el
+método de **Xing et al. (2019, IEEE Access)**, que enlazan imagen y música por
+similitud emocional en vez de entrenar un generador transmodal.
+
+```bash
+make imagenes          # descarga OASIS (92 MB)
+python src/imagenes.py # comprueba el corpus y la recuperación
+```
+
+Lo que recupera, por cuadrante:
+
+| cuadrante | imagen | categoría |
+|---|---|---|
+| tensión (V− A+) | Explosion 5 | Scene |
+| alegría (V+ A+) | Fireworks 2 | Scene |
+| calma (V+ A−) | Flowers 6 | Object |
+| tristeza (V− A−) | Garbage dump 1 | Scene |
+
+**La imagen no cambia cada medio segundo**, que sería un estroboscopio. Se
+mantiene hasta que se cumplen las dos condiciones: que hayan pasado 8 segundos
+y que el punto emocional se haya movido más de 0.22. Así los cambios caen donde
+la música cambia, no a intervalos fijos. Sobre una pista de 4.5 minutos salen
+unos 20 tramos.
+
+### Aviso de contenido
+
+OASIS es un conjunto afectivo, no un banco de imágenes agradables: para cubrir
+la valencia negativa incluye heridas, agresión y escenas angustiosas, y casi
+todo eso cae en la categoría `Person`. La categoría `Person` **queda fuera del corpus**, no solo desmarcada en la
+interfaz: se filtra al cargar, así que no puede aparecer ni pasando la
+categoría a mano en la URL. Quedan 554 imágenes.
+
+| categoría | n | por defecto |
+|---|---:|---|
+| Object | 200 | ✅ |
+| Scene | 220 | ✅ |
+| Animal | 134 | ✅ |
+| ~~Person~~ | 346 | excluida del corpus |
+
+## Formas
+
+`src/formas.py` mapea el mismo par (valencia, activación) a la forma de un
+polígono, con el mismo criterio que el color: una regularidad perceptual ya
+medida, fuera de la red, cambiable sin reentrenar.
+
+La regularidad es la **angularidad**. Bar y Neta (2006) mostraron que un
+contorno de vértices agudos se percibe como amenazante y uno curvo como seguro,
+incluso en objetos sin significado — un eje que ya corre paralelo a la valencia.
+
+El contorno es una **superfórmula de Gielis (2003)** en polares:
+
+```
+r(θ) = [ |cos(mθ/4)|^n2 + |sin(mθ/4)|^n3 ] ^ (−1/n1)
+```
+
+Con cuatro números da estrellas, flores, lentes, púas y círculos. Encima va una
+ondulación de m lóbulos y una distorsión armónica que produce las puntas largas.
+
+| parámetro | lo gobierna | efecto |
+|---|---|---|
+| `n1` | valencia | 0.16 púas ↔ 5.0 redondo |
+| `m` | activación (¾) y valencia (¼) | 3 a 17 lóbulos, **entero** |
+| `ondulacion` | activación × valencia | engorda los lóbulos |
+| `espigas` | activación × (1 − valencia) | puntas largas y finas |
+| `giro` | activación | 3 a 95 °/s |
+| `escala` | **energía RMS** | 0.18 a 1.0 |
+
+Lo que sale en cada cuadrante:
+
+| cuadrante | silueta |
+|---|---|
+| tensión (V− A+) | estrella de 17 agujas |
+| alegría (V+ A+) | flor de 13 pétalos carnosos |
+| calma (V+ A−) | círculo liso |
+| tristeza (V− A−) | estrella de 7 puntas afiladas |
+
+### Por qué los cambios son abruptos
+
+Tres decisiones deliberadas, porque con mapeos suaves la silueta apenas se movía:
+
+1. **Parámetros enteros.** `m` y `armonico` no interpolan: saltan.
+2. **Ganancia alta.** La respuesta es una tanh de pendiente fuerte en el centro.
+3. **Estirado por canción.** El modelo predice comprimido —la valencia rara vez
+   sale de [−0.5, +0.6]— así que `va_a_forma_lote` lleva el rango de esa canción
+   a [−1, 1] por percentiles. Sin eso se usaba un tercio del vocabulario. Es una
+   decisión de presentación, como la calibración de color: `estirar=False` la
+   desactiva.
+
+Dos detalles de implementación que conviene conocer:
+
+- **La asimetría se apaga cuando `n1` es pequeño.** Ahí `r = base^(−1/n1)` es
+  brutalmente sensible y, con `n2 ≠ n3`, lóbulos alternos colapsan en pelos de
+  un píxel. `python src/formas.py` tiene una comprobación que caza eso.
+- **El navegador replica `radio()`.** Se manda el parámetro y no la silueta
+  porque son 540 bloques por canción, y 420 vértices de cada uno serían
+  megabytes de JSON. Si cambia una, hay que cambiar la otra.
+
+### Cuánto pesa cada capa
+
+Tres constantes en `formas.py`, compartidas por el vídeo y el visor: si se
+tocan ahí, cambian los dos.
+
+| constante | por defecto | qué hace |
+|---|---:|---|
+| `ALFA_FIGURA` | 0.92 | opacidad de la figura sobre la imagen. Con 1.0 el recorte es duro; por debajo el fondo se transparenta a través de ella |
+| `ALFA_COLOR` | 0.80 | cuánto tiñe el filtro: 0 deja la foto cruda, 1 la lleva al color pleno |
+| `ATENUACION_FONDO` | 0.28 | qué tan atenuada queda la imagen fuera de la figura |
+
+```bash
+python src/visualizar.py cancion.mp3 --alfa-figura 0.6
+```
+
+Es un mapeo paramétrico, no un modelo generativo. Una GAN condicionada a
+(valencia, activación) iría **después** de esta etapa, no en lugar del Conv1D:
+el cuello de botella de la predicción es el ruido de etiqueta, no la capacidad.
+
+---
+
 ## Estructura
 
 ```
@@ -185,12 +401,20 @@ sin NaN ni Inf · etiquetas en [−0.77, 0.83]
 ├── Makefile                  make datos / extraer / verificar
 ├── scripts/
 │   ├── descargar_datos.py    descarga DEAM (stdlib: corre sin el venv)
+│   ├── descargar_imagenes.py descarga OASIS (stdlib)
+│   ├── pista_demo.py         arma las pistas de prueba
 │   └── verificar.py          comprueba entorno, GPU y datos
 ├── src/
 │   ├── config.py             rutas y constantes
 │   ├── color.py              Russell → HSV, verificado en 4 cuadrantes
+│   ├── formas.py             Russell → polígono, verificado en 4 cuadrantes
+│   ├── imagenes.py           recuperación en OASIS por cercanía emocional
 │   ├── features.py           extracción alineada con las anotaciones
-│   └── extraer.py            corre el corpus en paralelo
+│   ├── extraer.py            corre el corpus en paralelo
+│   ├── entrenar.py           MLP y Conv1D, evaluación descompuesta
+│   ├── visualizar.py         canción → franja PNG y video MP4
+│   └── servidor.py           visor web (biblioteca estándar)
+├── demo/                     tu audio (ignorado por git salvo el README)
 └── data/                     (ignorado por git) corpus y características
 ```
 
@@ -203,15 +427,18 @@ sin NaN ni Inf · etiquetas en [−0.77, 0.83]
 | Mapeo emoción → color | ✅ verificado |
 | Descarga y verificación del corpus | ✅ |
 | Extracción de características | ✅ 108 120 puntos |
-| MLP (línea base) | pendiente |
-| Conv1D sobre secuencias | pendiente |
+| MLP (línea base) | ✅ r dentro 0.079 |
+| Conv1D sobre secuencias | ✅ r dentro 0.134 |
 | Conv2D sobre mel-espectrograma | pendiente |
 | CRNN | pendiente |
 | Autoencoder (no supervisado) | pendiente |
-| Renderizado de video | pendiente |
+| Renderizado de video | ✅ |
+| Visor web en vivo | ✅ |
+| Mapeo a formas (paramétrico) | ✅ |
+| Capa de imagen (OASIS) | ✅ |
 
-Métricas previstas: RMSE y correlación de Pearson, **separadas en componente
-entre canciones y dentro de canción**, reportadas contra el techo humano.
+Métricas: RMSE y correlación de Pearson, **separadas en componente entre
+canciones y dentro de canción**, reportadas contra el techo humano.
 
 ---
 
